@@ -8,7 +8,7 @@ public struct JSONLogFormatter: LogFormatter {
     public init() {}
 
     public func format(event: LogEvent, config: LoggerConfiguration) -> String {
-        let timestamp = config.dateFormatter.string(from: event.timestamp)
+        let timestamp = event.timestamp.formatted(config.dateFormatStyle)
         let record = JSONLogRecord(
             id: event.id.uuidString,
             timestamp: timestamp,
@@ -46,7 +46,7 @@ public struct PrettyLogFormatter: LogFormatter {
     public init() {}
 
     public func format(event: LogEvent, config: LoggerConfiguration) -> String {
-        let timestamp = config.dateFormatter.string(from: event.timestamp)
+        let timestamp = event.timestamp.formatted(config.dateFormatStyle)
         let tagPart = event.tags.isEmpty ? "" : "[\(event.tags.joined(separator: ","))]"
         let threadPart = event.thread.map { "{\($0)}" } ?? ""
         let sourcePart: String

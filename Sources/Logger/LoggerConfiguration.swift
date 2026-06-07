@@ -1,15 +1,15 @@
 import Foundation
 
-public struct LoggerConfiguration {
+public struct LoggerConfiguration: Sendable {
     public var minLevel: LogLevel
     public var enabledTags: Set<String>?
     public var redactKeys: Set<String>
     public var samplingRate: Double
     public var includeSourceInfo: Bool
     public var includeThread: Bool
-    public var dateFormatter: ISO8601DateFormatter
-    public var timeZone: TimeZone
-    public var dateProvider: () -> Date
+    public var maxQueuedEvents: Int
+    public var dateFormatStyle: Date.ISO8601FormatStyle
+    public var dateProvider: @Sendable () -> Date
 
     public init(
         minLevel: LogLevel = .info,
@@ -18,9 +18,9 @@ public struct LoggerConfiguration {
         samplingRate: Double = 1.0,
         includeSourceInfo: Bool = true,
         includeThread: Bool = true,
-        dateFormatter: ISO8601DateFormatter = ISO8601DateFormatter(),
+        maxQueuedEvents: Int = 1_000,
         timeZone: TimeZone = .current,
-        dateProvider: @escaping () -> Date = Date.init
+        dateProvider: @Sendable @escaping () -> Date = Date.init
     ) {
         self.minLevel = minLevel
         self.enabledTags = enabledTags
@@ -28,9 +28,8 @@ public struct LoggerConfiguration {
         self.samplingRate = samplingRate
         self.includeSourceInfo = includeSourceInfo
         self.includeThread = includeThread
-        dateFormatter.timeZone = timeZone
-        self.dateFormatter = dateFormatter
-        self.timeZone = timeZone
+        self.maxQueuedEvents = maxQueuedEvents
+        self.dateFormatStyle = Date.ISO8601FormatStyle(timeZone: timeZone)
         self.dateProvider = dateProvider
     }
 

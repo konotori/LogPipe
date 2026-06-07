@@ -44,7 +44,7 @@ public enum LogValue: Sendable, Encodable, Hashable {
         case let value as Bool:
             return .bool(value)
         case let value as Date:
-            return .string(ISO8601DateFormatter().string(from: value))
+            return .string(value.formatted(.iso8601))
         case let value as URL:
             return .string(value.absoluteString)
         case let value as [String: Any]:

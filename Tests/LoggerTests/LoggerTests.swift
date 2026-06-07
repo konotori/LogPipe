@@ -242,6 +242,214 @@ struct LoggerTests {
 		#expect(contents.contains("file-write"))
 	}
 	
+	@Test func loggerTypes_AreSendable_CompileTimeCheck() {
+		func requiresSendable<T: Sendable>(_: T.Type) {}
+		requiresSendable(Logger.self)
+		requiresSendable(LoggerConfiguration.self)
+		requiresSendable((any LoggerProtocol).self)
+	}
+
+	@Test @MainActor func threadInfo_CapturedAtCallSite_MainThreadIsMain() async {
+		var config = LoggerConfiguration(minLevel: .debug)
+		config.dateProvider = { Date(timeIntervalSince1970: 0) }
+		let sink = CapturingSink()
+		let logger = Logger(
+			config: config,
+			destinations: [LogDestination(formatter: PrettyLogFormatter(), sink: sink)]
+		)
+
+		logger.info("from main")
+
+		let received = await waitForCount(sink, 1)
+		#expect(received)
+		#expect(sink.allRecords().first?.1.thread == "main")
+	}
+
+	@Test func flush_DrainsQueueSynchronously_EventVisibleImmediately() {
+		var config = LoggerConfiguration(minLevel: .debug)
+		config.dateProvider = { Date(timeIntervalSince1970: 0) }
+		let sink = CapturingSink()
+		let logger = Logger(
+			config: config,
+			destinations: [LogDestination(formatter: PrettyLogFormatter(), sink: sink)]
+		)
+
+		logger.info("a")
+		logger.info("b")
+		logger.flush()
+
+		#expect(sink.count() == 2)
+	}
+
+	@Test func fatal_EmitsSynchronously_NoWaitNeeded() {
+		var config = LoggerConfiguration(minLevel: .debug)
+		config.dateProvider = { Date(timeIntervalSince1970: 0) }
+		let sink = CapturingSink()
+		let logger = Logger(
+			config: config,
+			destinations: [LogDestination(formatter: PrettyLogFormatter(), sink: sink)]
+		)
+
+		logger.fatal("crash")
+
+		#expect(sink.count() == 1)
+		#expect(sink.allRecords().first?.1.level == .fatal)
+	}
+
+	@Test func autoclosure_NotEvaluated_WhenBelowMinLevel() {
+		let config = LoggerConfiguration(minLevel: .warn)
+		let sink = CapturingSink()
+		let logger = Logger(
+			config: config,
+			destinations: [LogDestination(formatter: PrettyLogFormatter(), sink: sink)]
+		)
+
+		final class Flag: @unchecked Sendable { var evaluated = false }
+		let flag = Flag()
+		func expensiveMessage() -> String {
+			flag.evaluated = true
+			return "expensive"
+		}
+
+		logger.debug(expensiveMessage())
+		logger.flush()
+
+		#expect(!flag.evaluated)
+		#expect(sink.count() == 0)
+	}
+
+	@Test func fileLogSink_RotatesFile_WhenExceedingMaxSize() throws {
+		var config = LoggerConfiguration(minLevel: .debug)
+		config.dateProvider = { Date(timeIntervalSince1970: 0) }
+		config.includeSourceInfo = false
+		let directory = FileManager.default.temporaryDirectory
+			.appendingPathComponent("logger-rotation-test", isDirectory: true)
+		try? FileManager.default.removeItem(at: directory)
+		let fileURL = directory.appendingPathComponent("app.log")
+
+		let fileSink = FileLogSink(fileURL: fileURL, maxFileSize: 64, maxArchivedFiles: 2)
+		let logger = Logger(
+			config: config,
+			destinations: [LogDestination(formatter: PrettyLogFormatter(), sink: fileSink)]
+		)
+
+		for index in 0..<10 {
+			logger.info("rotation-line-\(index)")
+		}
+		logger.flush()
+
+		let archived = fileURL.appendingPathExtension("1")
+		#expect(FileManager.default.fileExists(atPath: fileURL.path))
+		#expect(FileManager.default.fileExists(atPath: archived.path))
+	}
+
+	@Test func fileLogSink_RecoversAfterFileDeleted_KeepsLogging() async throws {
+		var config = LoggerConfiguration(minLevel: .debug)
+		config.dateProvider = { Date(timeIntervalSince1970: 0) }
+		let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("logger-recover-test.log")
+		try? FileManager.default.removeItem(at: fileURL)
+
+		let fileSink = FileLogSink(fileURL: fileURL)
+		let logger = Logger(
+			config: config,
+			destinations: [LogDestination(formatter: PrettyLogFormatter(), sink: fileSink)]
+		)
+
+		logger.info("before-delete")
+		logger.flush()
+		try FileManager.default.removeItem(at: fileURL)
+
+		logger.info("after-delete")
+		logger.flush()
+
+		let contents = try String(contentsOf: fileURL, encoding: .utf8)
+		#expect(contents.contains("after-delete"))
+	}
+
+	@Test func backpressure_DropsEventsBeyondLimit_ReportsDropCount() {
+		var config = LoggerConfiguration(minLevel: .debug)
+		config.dateProvider = { Date(timeIntervalSince1970: 0) }
+		config.maxQueuedEvents = 1
+
+		let started = DispatchSemaphore(value: 0)
+		let release = DispatchSemaphore(value: 0)
+		let sink = CapturingSink()
+		let blockingSink = RemoteLogSink { formatted, event in
+			sink.emit(formatted, event: event)
+			if event.message == "blocker" {
+				started.signal()
+				release.wait()
+			}
+		}
+
+		let logger = Logger(
+			config: config,
+			destinations: [LogDestination(formatter: PrettyLogFormatter(), sink: blockingSink)]
+		)
+
+		logger.info("blocker")
+		started.wait() // blocker is now occupying the queue
+		logger.info("dropped") // pending slot full -> dropped
+		release.signal()
+		logger.flush()
+		logger.info("after")
+		logger.flush()
+
+		let messages = sink.allRecords().map { $0.1.message }
+		#expect(messages.contains("blocker"))
+		#expect(!messages.contains("dropped"))
+		#expect(messages.contains("after"))
+		#expect(messages.contains { $0.contains("dropped 1 event(s)") })
+	}
+
+	@Test func perDestinationMinLevel_RoutesByLevel_EachSinkOwnThreshold() {
+		var config = LoggerConfiguration(minLevel: .debug)
+		config.dateProvider = { Date(timeIntervalSince1970: 0) }
+		let consoleSink = CapturingSink()
+		let remoteSink = CapturingSink()
+		let logger = Logger(
+			config: config,
+			destinations: [
+				LogDestination(formatter: PrettyLogFormatter(), sink: consoleSink, minLevel: .debug),
+				LogDestination(formatter: JSONLogFormatter(), sink: remoteSink, minLevel: .error)
+			]
+		)
+
+		logger.debug("debug")
+		logger.info("info")
+		logger.error("error")
+		logger.flush()
+
+		#expect(consoleSink.count() == 3)
+		#expect(remoteSink.count() == 1)
+		#expect(remoteSink.allRecords().first?.1.level == .error)
+	}
+
+	@Test func errorOverload_ExtractsStructuredErrorFields_UserContextWins() {
+		var config = LoggerConfiguration(minLevel: .debug)
+		config.dateProvider = { Date(timeIntervalSince1970: 0) }
+		let sink = CapturingSink()
+		let logger = Logger(
+			config: config,
+			destinations: [LogDestination(formatter: JSONLogFormatter(), sink: sink)]
+		)
+
+		let underlying = NSError(domain: "NSURLErrorDomain", code: -1009, userInfo: [
+			NSLocalizedDescriptionKey: "The Internet connection appears to be offline."
+		])
+		logger.error("Payment failed", error: underlying, context: ["error.code": 42, "orderId": "A123"])
+		logger.flush()
+
+		#expect(sink.count() == 1)
+		let event = sink.allRecords().first?.1
+		#expect(event?.level == .error)
+		let ctx = event?.context ?? [:]
+		#expect(ctx["error.domain"] == .string("NSURLErrorDomain"))
+		#expect(ctx["error.code"] == .int(42)) // user-provided context overrides
+		#expect(ctx["error.description"] == .string("The Internet connection appears to be offline."))
+		#expect(ctx["orderId"] == .string("A123"))
+	}
+
 	@Test func remoteSink_ReceivesFormattedOutput_UsesFormatter() async {
 		var config = LoggerConfiguration(minLevel: .debug)
 		config.dateProvider = { Date(timeIntervalSince1970: 0) }
