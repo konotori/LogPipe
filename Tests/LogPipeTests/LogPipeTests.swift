@@ -1,9 +1,9 @@
 import Foundation
 import Testing
-@testable import Logger
+@testable import LogPipe
 
 final class CapturingSink: LogSink, @unchecked Sendable {
-	private let queue = DispatchQueue(label: "logger.tests.capturing.sink")
+	private let queue = DispatchQueue(label: "logpipe.tests.capturing.sink")
 	private var records: [(String, LogEvent)] = []
 	
 	func emit(_ formatted: String, event: LogEvent) {

@@ -1,37 +1,67 @@
-# Logger
+# LogPipe
+
+**Pipeline logging gọn nhẹ, production-ready cho iOS & macOS — một API duy nhất, log có cấu trúc, sẵn sàng Swift 6.**
+
+[![Swift 6.0](https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white)](https://swift.org)
+[![Platforms](https://img.shields.io/badge/Platforms-iOS%2015%2B%20%7C%20macOS%2012%2B-blue?logo=apple)](#yêu-cầu)
+[![SPM](https://img.shields.io/badge/SwiftPM-compatible-brightgreen)](#cài-đặt)
+[![Sendable](https://img.shields.io/badge/Concurrency-Sendable-9cf)](#20-swift-6-concurrency--actor-và-task)
+[![License: MIT](https://img.shields.io/badge/License-MIT-lightgrey)](LICENSE)
 
 > [English](README.md) | Tiếng Việt
 
-Package logging gọn nhẹ, production-ready cho iOS/macOS với một API duy nhất và nhất quán. Thiết kế để dùng được ở mọi tầng (UI, Network, Business) mà không cần tạo nhiều loại logger khác nhau. Log có cấu trúc, mang theo context, an toàn cho production, và toàn bộ public type đều `Sendable` — sẵn sàng cho Swift 6.
+Thiết kế để dùng được ở mọi tầng (UI, Network, Business) mà không cần tạo nhiều loại logger khác nhau. Mỗi lần gọi log chảy qua một pipeline duy nhất:
 
-## Vì sao dùng Logger này
+```mermaid
+flowchart LR
+    A["logger.info(…)"] --> B["Check<br/>level"] --> C["Filters"] --> D["Sampling"] --> E["Redaction"] --> F{"Destinations"}
+    F -- "Pretty · debug+" --> G["🖥 Console"]
+    F -- "JSON · info+" --> H["📄 File"]
+    F -- "JSON · error+" --> I["☁️ Remote"]
+```
 
-- Một API duy nhất cho mọi tầng: UI, Network, Business, System.
-- Log có cấu trúc với context và tags.
-- Nhiều output tùy chọn (console, unified logging, file, remote) — mỗi output có level tối thiểu riêng.
-- Tích hợp sẵn redaction để che dữ liệu nhạy cảm.
-- Sampling và backpressure để an toàn trong production.
-- Log dưới mức `minLevel` gần như zero-cost (fast path bằng `@autoclosure`).
-- An toàn khi crash: `fatal` được xử lý đồng bộ, `flush()` đẩy hết log đang chờ khi cần.
-- Sẵn sàng Swift 6: mọi public type đều `Sendable`.
+## Điểm nổi bật
+
+- **Một API cho mọi tầng** — UI, Network, Business, System.
+- **Log có cấu trúc** — message + tags + context có kiểu, query được trên mọi collector.
+- **Level riêng từng destination** — console nhận `debug+`, file `info+`, remote `error+`, từ một lần gọi duy nhất.
+- **Privacy có sẵn** — redaction theo key chạy trước khi bất cứ thứ gì được format hay emit.
+- **An toàn cho production** — sampling, backpressure có báo cáo drop, file rotation tự phục hồi.
+- **An toàn khi crash** — `fatal` chạy đồng bộ; `flush()` đẩy hết log đang chờ khi cần.
+- **Gần như zero-cost khi bị tắt** — fast path bằng `@autoclosure`: dưới `minLevel`, message còn chưa được tạo ra.
+- **Swift 6 native** — mọi public type đều `Sendable`; dùng từ bất kỳ actor, task hay thread nào.
+
+## Mục lục
+
+- [Yêu cầu](#yêu-cầu) · [Cài đặt](#cài-đặt) · [Bắt đầu nhanh](#bắt-đầu-nhanh)
+- [Setup khuyến nghị cho production](#setup-khuyến-nghị-cho-production)
+- [Khái niệm cốt lõi](#khái-niệm-cốt-lõi)
+- [Các use case](#các-use-case) — 20 công thức copy-paste
+- [Formatters & Sinks](#formatters) · [Ghi chú hiệu năng](#ghi-chú-về-hiệu-năng--độ-tin-cậy)
+- [Tìm hiểu sâu kiến trúc →](ARCHITECTURE.vi.md)
 
 ## Yêu cầu
 
-- iOS 15+ / macOS 12+
-- Swift 6 (SwiftPM, tools 6.0)
+| | Tối thiểu |
+|---|---|
+| iOS | 15.0 |
+| macOS | 12.0 |
+| Swift | 6.0 (SwiftPM tools 6.0) |
 
-## Cài đặt (Swift Package Manager)
+## Cài đặt
+
+Thêm LogPipe vào `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/konotori/Logger", from: "1.0.0")
+.package(url: "https://github.com/konotori/LogPipe", from: "1.0.0")
 ```
 
-Sau đó thêm `Logger` vào dependencies của target.
+Hoặc trong Xcode: **File → Add Package Dependencies…** rồi dán URL của repo.
 
 ## Bắt đầu nhanh
 
 ```swift
-import Logger
+import LogPipe
 
 let logger = Logger(
     config: LoggerConfiguration(minLevel: .debug),
@@ -50,7 +80,7 @@ logger.error("Payment failed", tags: ["BUSINESS"], context: ["orderId": "A123"])
 Tạo **một** logger dùng chung cho cả app (mỗi lần gọi `Logger(...)` sẽ tạo queue và config riêng — hầu như lúc nào bạn cũng chỉ cần đúng một instance), rồi tạo child logger cho từng module bằng `withTags`/`withContext`:
 
 ```swift
-import Logger
+import LogPipe
 
 enum Log {
     static let shared: Logger = {
@@ -92,10 +122,12 @@ Vì `Logger` là `Sendable`, khai báo `static let` như trên hoàn toàn hợp
 
 ## Khái niệm cốt lõi
 
-- **LogEvent**: đơn vị của một lần log (level, message, tags, context, thời gian, thread, source).
-- **Logger**: API công khai mà app gọi.
-- **Pipeline**: Check level nhanh → Filter → Sampling → Redact → Format → Emit.
-- **Destination**: bộ ba Formatter + Sink + `minLevel` riêng cho từng đích.
+| Khái niệm | Là gì |
+|---|---|
+| **LogEvent** | đơn vị của một lần log — level, message, tags, context, thời gian, thread, source |
+| **Logger** | API công khai mà app gọi |
+| **Pipeline** | check level nhanh → filter → sampling → redact → format → emit |
+| **Destination** | formatter + sink + `minLevel` riêng cho từng đích |
 
 > 📖 Để hiểu sâu từng thành phần, hành trình đầy đủ của pipeline, mô hình threading
 > và hướng dẫn chọn level, xem **[ARCHITECTURE.vi.md](ARCHITECTURE.vi.md)**.
@@ -280,7 +312,7 @@ let logger = Logger(
 
 ### 12) Remote Logging — pattern facade
 
-Trong đa số app production, bạn **không** ship toàn bộ log lên server. Setup phổ biến là dùng crash reporter (Crashlytics, Sentry): log của bạn trở thành *breadcrumbs* đính kèm crash/error report. Giữ package này làm API duy nhất mà codebase gọi, còn SDK chỉ là một sink phía sau:
+Trong đa số app production, bạn **không** ship toàn bộ log lên server. Setup phổ biến là dùng crash reporter (Crashlytics, Sentry): log của bạn trở thành *breadcrumbs* đính kèm crash/error report. Giữ LogPipe làm API duy nhất mà codebase gọi, còn SDK chỉ là một sink phía sau:
 
 ```swift
 // Ví dụ Crashlytics: mọi log thành breadcrumb, lỗi thành non-fatal record.
@@ -426,16 +458,19 @@ Thông tin thread (`"main"`/`"background"`) và timestamp được lấy **ngay 
 
 ## Formatters
 
-- **PrettyLogFormatter**: text dễ đọc cho debug local.
-  `2026-06-07T10:00:00Z [ERROR][BUSINESS]{main} Payment failed {"orderId":"A123"} (Checkout.swift:42 pay())`
-- **JSONLogFormatter**: output có cấu trúc cho file và remote collector (key được sort, format ổn định).
+| Formatter | Output | Phù hợp cho |
+|---|---|---|
+| `PrettyLogFormatter` | `2026-06-07T10:00:00Z [ERROR][BUSINESS]{main} Payment failed {"orderId":"A123"} (Checkout.swift:42 pay())` | debug local |
+| `JSONLogFormatter` | mỗi dòng một JSON object, key được sort, format ổn định | file & remote collector |
 
 ## Sinks
 
-- **ConsoleLogSink**: in ra console (development).
-- **OSLogSink**: unified logging của hệ thống (Console.app, sysdiagnose).
-- **FileLogSink**: ghi file bất đồng bộ, rotation theo dung lượng, tự phục hồi khi file bị xóa.
-- **RemoteLogSink**: adapter dạng closure cho mọi SDK remote hoặc backend.
+| Sink | Đích | Ghi chú |
+|---|---|---|
+| `ConsoleLogSink` | `print` | development |
+| `OSLogSink` | unified logging | Console.app, sysdiagnose |
+| `FileLogSink` | file | ghi bất đồng bộ, rotation theo dung lượng, tự phục hồi |
+| `RemoteLogSink` | closure của bạn | adapter cho mọi SDK hoặc backend |
 
 ## Ghi chú về hiệu năng & độ tin cậy
 
@@ -459,4 +494,4 @@ swift test
 
 ## License
 
-MIT (hoặc license bạn chọn)
+[MIT](LICENSE)

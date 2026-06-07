@@ -1,8 +1,8 @@
-# Kiến trúc — Logger này hoạt động như thế nào
+# Kiến trúc — LogPipe hoạt động như thế nào
 
 > [English](ARCHITECTURE.md) | Tiếng Việt
 
-Tài liệu này giải thích mọi thành phần của package Logger, hành trình của một log event qua hệ thống, và thành phần nào chịu trách nhiệm cho tính năng nào — để bất kỳ developer nào cũng có thể hiểu, sử dụng và mở rộng một cách tự tin.
+Tài liệu này giải thích mọi thành phần của LogPipe, hành trình của một log event qua hệ thống, và thành phần nào chịu trách nhiệm cho tính năng nào — để bất kỳ developer nào cũng có thể hiểu, sử dụng và mở rộng một cách tự tin.
 
 ## Mục lục
 
@@ -20,14 +20,23 @@ Tài liệu này giải thích mọi thành phần của package Logger, hành t
 
 Package được xây dựng quanh một ý tưởng duy nhất: **mỗi lần gọi log tạo ra một event, và event đó chảy qua một pipeline gồm các tầng nhỏ có thể thay thế**.
 
-```
- Code của bạn                  Pipeline                           Đầu ra
-┌──────────┐   ┌──────────────────────────────────────────┐   ┌──────────────┐
-│ logger   │ → │ Check level → Filter → Sample → Redact → │ → │ Console      │
-│ .info()  │   │ Format → Emit                            │   │ File         │
-└──────────┘   └──────────────────────────────────────────┘   │ os_log       │
-                                                              │ Remote SDK   │
-                                                              └──────────────┘
+```mermaid
+flowchart LR
+    subgraph YC["Code của bạn"]
+        A["logger.info(…)"]
+    end
+    subgraph P["Pipeline"]
+        direction LR
+        B["Check level"] --> C["Filter"] --> D["Sample"] --> E["Redact"] --> F["Format"] --> G["Emit"]
+    end
+    subgraph O["Đầu ra"]
+        H["Console"]
+        I["File"]
+        J["os_log"]
+        K["Remote SDK"]
+    end
+    A --> B
+    G --> H & I & J & K
 ```
 
 Mỗi tầng là một protocol (`LogFilter`, `LogRedactor`, `LogFormatter`, `LogSink`), và các implementation có sẵn chỉ là mặc định. Bạn có thể thay hoặc thêm bất kỳ tầng nào mà không đụng đến các tầng còn lại.
@@ -45,47 +54,35 @@ Chính xác thì điều gì xảy ra khi bạn viết dòng này?
 logger.info("Order created", tags: ["BUSINESS"], context: ["orderId": "A123"])
 ```
 
+```mermaid
+flowchart TD
+    subgraph CT["🧵 Caller thread — code của bạn, làm ít việc nhất có thể"]
+        A["logger.info(message, context)"] --> B{"1 · level ≥ minLevel?"}
+        B -- "không" --> X["return ngay lập tức<br/>(message chưa hề được tạo — @autoclosure)"]
+        B -- "có" --> C["2 · Dựng event<br/>merge context/tags kế thừa · convert sang LogValue<br/>lấy timestamp + thread + file:line ngay tại chỗ gọi"]
+        C --> D{"3 · queue đầy?<br/>(maxQueuedEvents)"}
+        D -- "có" --> Y["drop + cộng bộ đếm<br/>(báo lại sau bằng một warn log)"]
+    end
+    D -- "không" --> E
+    subgraph BQ["⚙️ Background queue — serial, caller thread được giải phóng"]
+        E["4 · Filters<br/>MinLevelFilter · TagFilter · custom"] --> F["5 · Sampling<br/>chỉ debug/info, giữ một phần ngẫu nhiên"]
+        F --> G["6 · Redaction<br/>redactKeys → [REDACTED], trước khi format"]
+        G --> H{"7 · Với từng destination:<br/>level ≥ destination.minLevel?"}
+    end
+    H --> I["🖥 Console<br/>debug+"]
+    H --> J["📄 File<br/>queue riêng · info+"]
+    H --> K["☁️ Remote SDK<br/>chỉ error+"]
 ```
-            CALLER THREAD (code của bạn — làm ít việc nhất có thể)
-┌ Bước 1. Check level nhanh ──────────────────────────────────────────┐
-│ .info >= config.minLevel?  Nếu không → return ngay lập tức.         │
-│ Nhờ @autoclosure, chuỗi message và dictionary context               │
-│ CHƯA HỀ ĐƯỢC TẠO RA. Một log bị tắt chỉ tốn ~một lần đọc lock.      │
-└──────────────────────────────┬──────────────────────────────────────┘
-┌ Bước 2. Dựng event ──────────▼──────────────────────────────────────┐
-│ • Evaluate message và context (giờ mới biết chắc log sẽ được dùng)  │
-│ • Merge context/tags kế thừa từ withContext()/withTags()           │
-│ • Convert giá trị context sang LogValue (type-safe, Sendable)       │
-│ • Lấy timestamp, thread ("main"/"background"), file:line TẠI ĐÂY — │
-│   ngay chỗ gọi log, nên chúng mô tả CODE CỦA BẠN, không phải logger │
-└──────────────────────────────┬──────────────────────────────────────┘
-┌ Bước 3. Check backpressure ──▼──────────────────────────────────────┐
-│ Đã đủ maxQueuedEvents đang chờ? → drop event này, cộng vào bộ đếm.  │
-│ (Số event bị drop sẽ được báo sau bằng một warn log tự sinh.)       │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               ▼  chuyển queue — caller thread được giải phóng
-            BACKGROUND QUEUE ("logger.core.queue", serial)
-┌ Bước 4. Filters ────────────────────────────────────────────────────┐
-│ Mọi LogFilter phải đồng ý: MinLevelFilter, TagFilter, custom...     │
-└──────────────────────────────┬──────────────────────────────────────┘
-┌ Bước 5. Sampling ────────────▼──────────────────────────────────────┐
-│ Chỉ debug/info: giữ lại một phần ngẫu nhiên (samplingRate).         │
-│ warn/error/fatal không bao giờ bị sample.                           │
-└──────────────────────────────┬──────────────────────────────────────┘
-┌ Bước 6. Redaction ───────────▼──────────────────────────────────────┐
-│ Key có trong redactKeys (không phân biệt hoa thường, đệ quy)        │
-│ → "[REDACTED]". Chạy TRƯỚC khi format, nên không sink nào           │
-│ nhìn thấy giá trị gốc.                                              │
-└──────────────────────────────┬──────────────────────────────────────┘
-┌ Bước 7. Theo từng destination ▼─────────────────────────────────────┐
-│ for each LogDestination(formatter, sink, minLevel):                 │
-│     event.level >= destination.minLevel?                            │
-│         → formatter.format(event)  → sink.emit(formatted, event)    │
-└───────┬─────────────────┬─────────────────┬─────────────────────────┘
-        ▼                 ▼                 ▼
-    Console            File (queue        Remote SDK
-    (debug+)           riêng, info+)      (chỉ error+)
-```
+
+Diễn giải từng bước, với các chi tiết mà sơ đồ không chứa hết:
+
+1. **Check level nhanh** — `.info >= config.minLevel`? Nếu không, return ngay lập tức. Nhờ `@autoclosure`, chuỗi message và dictionary context *chưa hề được tạo ra*; một log bị tắt chỉ tốn khoảng một lần đọc lock.
+2. **Dựng event** — evaluate message và context (giờ mới biết chắc log sẽ được dùng), merge context/tags kế thừa từ `withContext()`/`withTags()`, convert giá trị context sang `LogValue` (type-safe, `Sendable`), và lấy timestamp, thread (`"main"`/`"background"`), `file:line` **ngay tại chỗ gọi** — nên chúng mô tả *code của bạn*, không phải queue của logger.
+3. **Check backpressure** — nếu đã đủ `maxQueuedEvents` đang chờ, drop event này và cộng vào bộ đếm. Số event bị drop sẽ được báo lại sau bằng một warn log tự sinh.
+4. **Filters** — mọi `LogFilter` phải chấp thuận: `MinLevelFilter`, `TagFilter`, và filter bạn tự viết.
+5. **Sampling** — chỉ debug/info: giữ lại một phần ngẫu nhiên (`samplingRate`). `warn`/`error`/`fatal` không bao giờ bị sample.
+6. **Redaction** — key có trong `redactKeys` (không phân biệt hoa thường, đệ quy) trở thành `[REDACTED]`. Chạy *trước* khi format, nên không sink nào nhìn thấy giá trị gốc.
+7. **Theo từng destination** — với mỗi `LogDestination(formatter, sink, minLevel)`: nếu event vượt qua level riêng của destination đó thì format và emit.
 
 **Hai trường hợp đặc biệt:**
 
@@ -247,8 +244,8 @@ Vì sao ghép thành bộ? Vì **cùng một event thường cần format khác 
 | Check level nhanh | caller thread (một lần đọc lock) |
 | Evaluate message/context, convert LogValue | caller thread (chỉ khi log vượt qua check level) |
 | Lấy timestamp/thread/source | caller thread (để giá trị mô tả đúng chỗ gọi log) |
-| Filters, sampling, redaction, formatting | `logger.core.queue` (serial, QoS `.utility`) |
-| Emit của Console/OSLog/Remote | `logger.core.queue` |
+| Filters, sampling, redaction, formatting | `logpipe.core.queue` (serial, QoS `.utility`) |
+| Emit của Console/OSLog/Remote | `logpipe.core.queue` |
 | Ghi file | queue serial riêng của `FileLogSink` |
 | Pipeline của `fatal` | caller thread, chạy đồng bộ (để an toàn khi crash) |
 | `flush()` | caller thread, chờ đồng bộ cả hai queue xử lý xong |

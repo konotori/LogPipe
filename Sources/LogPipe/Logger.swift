@@ -147,7 +147,7 @@ final class LoggerCore: @unchecked Sendable {
         self.destinations = destinations
         self.filters = filters
         self.redactors = redactors
-        self.queue = DispatchQueue(label: "logger.core.queue", qos: .utility)
+        self.queue = DispatchQueue(label: "logpipe.core.queue", qos: .utility)
     }
 
     func currentMinLevel() -> LogLevel {

@@ -4,7 +4,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "Logger",
+    name: "LogPipe",
     platforms: [
         .iOS(.v15),
         .macOS(.v12),
@@ -12,19 +12,19 @@ let package = Package(
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
-            name: "Logger",
-            targets: ["Logger"]
+            name: "LogPipe",
+            targets: ["LogPipe"]
         ),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
-            name: "Logger"
+            name: "LogPipe"
         ),
         .testTarget(
-            name: "LoggerTests",
-            dependencies: ["Logger"]
+            name: "LogPipeTests",
+            dependencies: ["LogPipe"]
         ),
     ]
 )

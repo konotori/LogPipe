@@ -1,37 +1,67 @@
-# Logger
+# LogPipe
+
+**A lightweight, production-ready logging pipeline for iOS & macOS — one API, structured events, Swift 6 ready.**
+
+[![Swift 6.0](https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white)](https://swift.org)
+[![Platforms](https://img.shields.io/badge/Platforms-iOS%2015%2B%20%7C%20macOS%2012%2B-blue?logo=apple)](#requirements)
+[![SPM](https://img.shields.io/badge/SwiftPM-compatible-brightgreen)](#installation)
+[![Sendable](https://img.shields.io/badge/Concurrency-Sendable-9cf)](#20-swift-6-concurrency--actors-and-tasks)
+[![License: MIT](https://img.shields.io/badge/License-MIT-lightgrey)](LICENSE)
 
 > English | [Tiếng Việt](README.vi.md)
 
-A lightweight, production-ready logging kit for iOS/macOS built with a single, consistent API. It is designed to be used everywhere (UI, Network, Business) without creating separate logger types. Logs are structured, context-aware, safe for production, and fully `Sendable` for Swift 6.
+Designed to be used everywhere (UI, Network, Business) without creating separate logger types. Every log call flows through one pipeline:
 
-## Why This Logger
+```mermaid
+flowchart LR
+    A["logger.info(…)"] --> B["Level<br/>check"] --> C["Filters"] --> D["Sampling"] --> E["Redaction"] --> F{"Destinations"}
+    F -- "Pretty · debug+" --> G["🖥 Console"]
+    F -- "JSON · info+" --> H["📄 File"]
+    F -- "JSON · error+" --> I["☁️ Remote"]
+```
 
-- Single API for all layers: UI, Network, Business, System.
-- Structured logs with context and tags.
-- Pluggable outputs (console, unified logging, file, remote) — each with its own minimum level.
-- Built-in redaction for sensitive data.
-- Sampling and backpressure to stay safe in production.
-- Near-zero cost for disabled log levels (`@autoclosure` fast path).
-- Crash-safe: `fatal` is synchronous, `flush()` drains everything on demand.
-- Swift 6 ready: every public type is `Sendable`.
+## Highlights
+
+- **One API for every layer** — UI, Network, Business, System.
+- **Structured events** — message + tags + typed context, queryable on any collector.
+- **Per-destination levels** — console gets `debug+`, file `info+`, remote `error+`, from a single call.
+- **Privacy built in** — key-based redaction runs before anything is formatted or emitted.
+- **Production safety** — sampling, backpressure with reported drops, file rotation with self-recovery.
+- **Crash safe** — `fatal` is synchronous; `flush()` drains everything on demand.
+- **Near-zero cost when disabled** — `@autoclosure` fast path: below `minLevel`, the message is never even built.
+- **Swift 6 native** — every public type is `Sendable`; use it from any actor, task, or thread.
+
+## Table of Contents
+
+- [Requirements](#requirements) · [Installation](#installation) · [Quick Start](#quick-start)
+- [Recommended Production Setup](#recommended-production-setup)
+- [Core Concepts](#core-concepts)
+- [Use Cases](#use-cases) — 20 copy-paste recipes
+- [Formatters & Sinks](#formatters) · [Performance Notes](#performance--reliability-notes)
+- [Architecture deep dive →](ARCHITECTURE.md)
 
 ## Requirements
 
-- iOS 15+ / macOS 12+
-- Swift 6 (SwiftPM, tools 6.0)
+| | Minimum |
+|---|---|
+| iOS | 15.0 |
+| macOS | 12.0 |
+| Swift | 6.0 (SwiftPM tools 6.0) |
 
-## Installation (Swift Package Manager)
+## Installation
+
+Add LogPipe to your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/konotori/Logger", from: "1.0.0")
+.package(url: "https://github.com/konotori/LogPipe", from: "1.0.0")
 ```
 
-Then add `Logger` to your target dependencies.
+Or in Xcode: **File → Add Package Dependencies…** and paste the repository URL.
 
 ## Quick Start
 
 ```swift
-import Logger
+import LogPipe
 
 let logger = Logger(
     config: LoggerConfiguration(minLevel: .debug),
@@ -50,7 +80,7 @@ logger.error("Payment failed", tags: ["BUSINESS"], context: ["orderId": "A123"])
 Create **one** shared logger for the whole app (every `Logger(...)` creates its own queue and configuration — you almost always want exactly one), then derive child loggers per module with `withTags`/`withContext`:
 
 ```swift
-import Logger
+import LogPipe
 
 enum Log {
     static let shared: Logger = {
@@ -90,12 +120,14 @@ enum Log {
 
 Because `Logger` is `Sendable`, the `static let` above is fully legal in Swift 6 and the logger can be used from any actor, task, or thread.
 
-## Key Concepts
+## Core Concepts
 
-- **LogEvent**: the unit of logging (level, message, tags, context, time, thread, source).
-- **Logger**: the public API used by the app.
-- **Pipeline**: Fast level check → Filter → Sampling → Redact → Format → Emit.
-- **Destination**: a triple of Formatter + Sink + per-destination `minLevel`.
+| Concept | What it is |
+|---|---|
+| **LogEvent** | the unit of logging — level, message, tags, context, time, thread, source |
+| **Logger** | the public API your app calls |
+| **Pipeline** | fast level check → filter → sampling → redact → format → emit |
+| **Destination** | formatter + sink + per-destination `minLevel` |
 
 > 📖 For a deep dive into every component, the full pipeline walk-through, the
 > threading model, and level-choosing guidance, see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
@@ -279,7 +311,7 @@ let logger = Logger(
 
 ### 12) Remote Logging — the facade pattern
 
-In most production apps you do **not** ship every log to a server. The common setup is a crash reporter (Crashlytics, Sentry) where your logs become *breadcrumbs* attached to crash/error reports. Keep this package as the single API your codebase calls, and adapt the SDK behind a sink:
+In most production apps you do **not** ship every log to a server. The common setup is a crash reporter (Crashlytics, Sentry) where your logs become *breadcrumbs* attached to crash/error reports. Keep LogPipe as the single API your codebase calls, and adapt the SDK behind a sink:
 
 ```swift
 // Crashlytics example: all logs become breadcrumbs, errors become non-fatal records.
@@ -425,16 +457,19 @@ Thread info (`"main"`/`"background"`) and timestamps are captured **at the call 
 
 ## Formatters
 
-- **PrettyLogFormatter**: readable text for local debugging.
-  `2026-06-07T10:00:00Z [ERROR][BUSINESS]{main} Payment failed {"orderId":"A123"} (Checkout.swift:42 pay())`
-- **JSONLogFormatter**: structured output for files and remote collectors (sorted keys, stable shape).
+| Formatter | Output | Best for |
+|---|---|---|
+| `PrettyLogFormatter` | `2026-06-07T10:00:00Z [ERROR][BUSINESS]{main} Payment failed {"orderId":"A123"} (Checkout.swift:42 pay())` | local debugging |
+| `JSONLogFormatter` | one JSON object per line, sorted keys, stable shape | files & remote collectors |
 
 ## Sinks
 
-- **ConsoleLogSink**: prints to console (development).
-- **OSLogSink**: unified logging system (Console.app, sysdiagnose).
-- **FileLogSink**: async file appends with size-based rotation and self-recovery.
-- **RemoteLogSink**: closure-based adapter for any remote SDK or backend.
+| Sink | Destination | Notes |
+|---|---|---|
+| `ConsoleLogSink` | `print` | development |
+| `OSLogSink` | unified logging | Console.app, sysdiagnose |
+| `FileLogSink` | file | async appends, size-based rotation, self-recovery |
+| `RemoteLogSink` | your closure | adapter for any SDK or backend |
 
 ## Performance & Reliability Notes
 
@@ -451,11 +486,11 @@ Thread info (`"main"`/`"background"`) and timestamps are captured **at the call 
 swift test
 ```
 
-## Roadmap Ideas
+## Roadmap
 
 - Batched remote sender with offline persistence and retry (for self-hosted backends).
 - Payload truncation (size limits for huge context values).
 
 ## License
 
-MIT (or your preferred license)
+[MIT](LICENSE)

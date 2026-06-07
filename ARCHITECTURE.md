@@ -1,8 +1,8 @@
-# Architecture — How This Logger Works
+# Architecture — How LogPipe Works
 
 > English | [Tiếng Việt](ARCHITECTURE.vi.md)
 
-This document explains every component of the Logger package, how a log event travels through the system, and which component is responsible for which feature — so that any developer can understand, use, and extend it with confidence.
+This document explains every component of LogPipe, how a log event travels through the system, and which component is responsible for which feature — so that any developer can understand, use, and extend it with confidence.
 
 ## Table of Contents
 
@@ -20,14 +20,23 @@ This document explains every component of the Logger package, how a log event tr
 
 The package is built around one idea: **a log call creates an event, and the event flows through a pipeline of small, replaceable stages**.
 
-```
- Your code                     The pipeline                       The outputs
-┌──────────┐   ┌──────────────────────────────────────────┐   ┌──────────────┐
-│ logger   │ → │ Level check → Filter → Sample → Redact → │ → │ Console      │
-│ .info()  │   │ Format → Emit                            │   │ File         │
-└──────────┘   └──────────────────────────────────────────┘   │ os_log       │
-                                                              │ Remote SDK   │
-                                                              └──────────────┘
+```mermaid
+flowchart LR
+    subgraph YC["Your code"]
+        A["logger.info(…)"]
+    end
+    subgraph P["The pipeline"]
+        direction LR
+        B["Level check"] --> C["Filter"] --> D["Sample"] --> E["Redact"] --> F["Format"] --> G["Emit"]
+    end
+    subgraph O["The outputs"]
+        H["Console"]
+        I["File"]
+        J["os_log"]
+        K["Remote SDK"]
+    end
+    A --> B
+    G --> H & I & J & K
 ```
 
 Every stage is a protocol (`LogFilter`, `LogRedactor`, `LogFormatter`, `LogSink`), and the built-in implementations are just defaults. You can swap or add any stage without touching the others.
@@ -45,46 +54,35 @@ What exactly happens when you write this?
 logger.info("Order created", tags: ["BUSINESS"], context: ["orderId": "A123"])
 ```
 
+```mermaid
+flowchart TD
+    subgraph CT["🧵 Caller thread — your code, kept as fast as possible"]
+        A["logger.info(message, context)"] --> B{"1 · level ≥ minLevel?"}
+        B -- "no" --> X["return immediately<br/>(message never built — @autoclosure)"]
+        B -- "yes" --> C["2 · Build the event<br/>merge inherited context/tags · convert to LogValue<br/>capture timestamp + thread + file:line at the call site"]
+        C --> D{"3 · queue full?<br/>(maxQueuedEvents)"}
+        D -- "yes" --> Y["drop + count<br/>(reported later as a warn log)"]
+    end
+    D -- "no" --> E
+    subgraph BQ["⚙️ Background queue — serial, caller thread is free"]
+        E["4 · Filters<br/>MinLevelFilter · TagFilter · custom"] --> F["5 · Sampling<br/>debug/info only, random fraction"]
+        F --> G["6 · Redaction<br/>redactKeys → [REDACTED], before formatting"]
+        G --> H{"7 · For each destination:<br/>level ≥ destination.minLevel?"}
+    end
+    H --> I["🖥 Console<br/>debug+"]
+    H --> J["📄 File<br/>own queue · info+"]
+    H --> K["☁️ Remote SDK<br/>error+ only"]
 ```
-            CALLER THREAD (your code — kept as fast as possible)
-┌ Step 1. Fast level check ───────────────────────────────────────────┐
-│ Is .info >= config.minLevel?  If not → return immediately.          │
-│ Thanks to @autoclosure, the message string and context dictionary   │
-│ HAVE NOT EVEN BEEN BUILT yet. A disabled log costs ~one lock read.  │
-└──────────────────────────────┬──────────────────────────────────────┘
-┌ Step 2. Build the event ─────▼──────────────────────────────────────┐
-│ • Evaluate message and context (now we know the log will be used)   │
-│ • Merge inherited context/tags from withContext()/withTags()        │
-│ • Convert context values to LogValue (type-safe, Sendable)          │
-│ • Capture timestamp, thread ("main"/"background"), file:line HERE — │
-│   at the call site, so they describe YOUR code, not the logger's    │
-└──────────────────────────────┬──────────────────────────────────────┘
-┌ Step 3. Backpressure check ──▼──────────────────────────────────────┐
-│ Are maxQueuedEvents already waiting? → drop this event, count it.   │
-│ (The drop is reported later via a synthetic warn log.)              │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               ▼  hop — caller thread is free from here
-            BACKGROUND QUEUE ("logger.core.queue", serial)
-┌ Step 4. Filters ────────────────────────────────────────────────────┐
-│ Every LogFilter must say yes: MinLevelFilter, TagFilter, custom...  │
-└──────────────────────────────┬──────────────────────────────────────┘
-┌ Step 5. Sampling ────────────▼──────────────────────────────────────┐
-│ debug/info only: keep a random fraction (samplingRate).             │
-│ warn/error/fatal are never sampled away.                            │
-└──────────────────────────────┬──────────────────────────────────────┘
-┌ Step 6. Redaction ───────────▼──────────────────────────────────────┐
-│ Keys in redactKeys (case-insensitive, recursive) → "[REDACTED]".    │
-│ Runs BEFORE formatting, so no sink ever sees the raw value.         │
-└──────────────────────────────┬──────────────────────────────────────┘
-┌ Step 7. Per destination ─────▼──────────────────────────────────────┐
-│ for each LogDestination(formatter, sink, minLevel):                 │
-│     event.level >= destination.minLevel?                            │
-│         → formatter.format(event)  → sink.emit(formatted, event)    │
-└───────┬─────────────────┬─────────────────┬─────────────────────────┘
-        ▼                 ▼                 ▼
-    Console            File (own         Remote SDK
-    (debug+)           queue, info+)     (error+ only)
-```
+
+Step-by-step, with the details the diagram can't hold:
+
+1. **Fast level check** — is `.info >= config.minLevel`? If not, return immediately. Thanks to `@autoclosure`, the message string and context dictionary *have not even been built yet*; a disabled log costs about one lock read.
+2. **Build the event** — evaluate message and context (now we know the log will be used), merge inherited context/tags from `withContext()`/`withTags()`, convert context values to `LogValue` (type-safe, `Sendable`), and capture timestamp, thread (`"main"`/`"background"`), and `file:line` **here at the call site** — so they describe *your* code, not the logger's queue.
+3. **Backpressure check** — if `maxQueuedEvents` are already waiting, drop this event and count it. The drop is reported later via a synthetic warn log.
+4. **Filters** — every `LogFilter` must approve: `MinLevelFilter`, `TagFilter`, your custom ones.
+5. **Sampling** — debug/info only: keep a random fraction (`samplingRate`). `warn`/`error`/`fatal` are never sampled away.
+6. **Redaction** — keys in `redactKeys` (case-insensitive, recursive) become `[REDACTED]`. Runs *before* formatting, so no sink ever sees the raw value.
+7. **Per destination** — for each `LogDestination(formatter, sink, minLevel)`: if the event clears the destination's own level, format it and emit.
 
 **Two special paths:**
 
@@ -246,8 +244,8 @@ Why pair them? Because **the same event usually needs different shapes in differ
 | Fast level check | caller thread (one lock read) |
 | Message/context evaluation, LogValue conversion | caller thread (only if the log passes the level check) |
 | Timestamp/thread/source capture | caller thread (so values describe the call site) |
-| Filters, sampling, redaction, formatting | `logger.core.queue` (serial, `.utility` QoS) |
-| Console/OSLog/Remote emit | `logger.core.queue` |
+| Filters, sampling, redaction, formatting | `logpipe.core.queue` (serial, `.utility` QoS) |
+| Console/OSLog/Remote emit | `logpipe.core.queue` |
 | File writes | `FileLogSink`'s own serial queue |
 | `fatal` pipeline | caller thread, synchronously (crash safety) |
 | `flush()` | caller thread, synchronously drains both queues |

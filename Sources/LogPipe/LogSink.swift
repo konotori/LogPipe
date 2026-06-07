@@ -24,7 +24,7 @@ public struct ConsoleLogSink: LogSink {
 public struct OSLogSink: LogSink {
     private let logger: os.Logger
 
-    public init(subsystem: String = Bundle.main.bundleIdentifier ?? "Logger", category: String = "default") {
+    public init(subsystem: String = Bundle.main.bundleIdentifier ?? "LogPipe", category: String = "default") {
         self.logger = os.Logger(subsystem: subsystem, category: category)
     }
 
@@ -50,7 +50,7 @@ public final class FileLogSink: LogSink, @unchecked Sendable {
     private let fileURL: URL
     private let maxFileSize: UInt64
     private let maxArchivedFiles: Int
-    private let queue = DispatchQueue(label: "logger.file.sink")
+    private let queue = DispatchQueue(label: "logpipe.file.sink")
 
     // Accessed only on `queue`.
     private var handle: FileHandle?
