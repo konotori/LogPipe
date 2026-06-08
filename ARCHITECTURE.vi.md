@@ -14,8 +14,6 @@ Tài liệu này giải thích mọi thành phần của LogPipe, hành trình c
 6. [Bảng map Tính năng → Thành phần](#6-bảng-map-tính-năng--thành-phần)
 7. [Mở rộng Logger](#7-mở-rộng-logger)
 
----
-
 ## 1. Bức tranh tổng thể
 
 Package được xây dựng quanh một ý tưởng duy nhất: **mỗi lần gọi log tạo ra một event, và event đó chảy qua một pipeline gồm các tầng nhỏ có thể thay thế**.
@@ -300,7 +298,5 @@ Mỗi tầng pipeline là một protocol nhỏ — implement rồi truyền vào
 | Che dữ liệu theo cách riêng | `LogRedactor` | `Logger(redactors: [...])` |
 
 Yêu cầu đối với component tự viết: phải `Sendable` (compiler sẽ kiểm tra), `emit` không được throw hay block lâu (nó chạy trên queue pipeline dùng chung — hãy tự tạo queue riêng cho I/O chậm, như cách `FileLogSink` đã làm), và `flush()` phải xử lý xong đồng bộ mọi dữ liệu còn trong buffer.
-
----
 
 Xem công thức copy-paste cho từng use case tại [README](README.vi.md).

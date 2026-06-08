@@ -14,8 +14,6 @@ This document explains every component of LogPipe, how a log event travels throu
 6. [Feature → Component Map](#6-feature--component-map)
 7. [Extending the Logger](#7-extending-the-logger)
 
----
-
 ## 1. The Big Picture
 
 The package is built around one idea: **a log call creates an event, and the event flows through a pipeline of small, replaceable stages**.
@@ -300,7 +298,5 @@ Each pipeline stage is one small protocol — implement it and pass it in:
 | Mask data your own way | `LogRedactor` | `Logger(redactors: [...])` |
 
 Contract for custom components: they must be `Sendable` (the compiler enforces it), `emit` should never throw or block for long (it runs on the shared pipeline queue — do your own queueing for slow I/O, like `FileLogSink` does), and `flush()` should synchronously finish any buffered work.
-
----
 
 For copy-paste recipes of every use case, see the [README](README.md).
