@@ -5,7 +5,6 @@
 [![Swift 6.0](https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white)](https://swift.org)
 [![Platforms](https://img.shields.io/badge/Platforms-iOS%2015%2B%20%7C%20macOS%2012%2B-blue?logo=apple)](#requirements)
 [![SPM](https://img.shields.io/badge/SwiftPM-compatible-brightgreen)](#installation)
-[![Sendable](https://img.shields.io/badge/Concurrency-Sendable-9cf)](#20-swift-6-concurrency--actors-and-tasks)
 [![License: MIT](https://img.shields.io/badge/License-MIT-lightgrey)](LICENSE)
 
 > English | [Tiếng Việt](README.vi.md)
@@ -20,7 +19,25 @@ flowchart LR
     F -- "JSON · error+" --> I["☁️ Remote"]
 ```
 
-## Highlights
+## Table of Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Recommended Production Setup](#recommended-production-setup)
+- [Core Concepts](#core-concepts)
+- [Use Cases](#use-cases) — 20 copy-paste recipes
+- [Formatters](#formatters)
+- [Sinks](#sinks)
+- [Performance & Reliability Notes](#performance--reliability-notes)
+- [Testing](#testing)
+- [Roadmap](#roadmap)
+- [License](#license)
+
+Architecture deep dive → [ARCHITECTURE.md](ARCHITECTURE.md)
+
+## Features
 
 - **One API for every layer** — UI, Network, Business, System.
 - **Structured events** — message + tags + typed context, queryable on any collector.
@@ -30,15 +47,6 @@ flowchart LR
 - **Crash safe** — `fatal` is synchronous; `flush()` drains everything on demand.
 - **Near-zero cost when disabled** — `@autoclosure` fast path: below `minLevel`, the message is never even built.
 - **Swift 6 native** — every public type is `Sendable`; use it from any actor, task, or thread.
-
-## Table of Contents
-
-- [Requirements](#requirements) · [Installation](#installation) · [Quick Start](#quick-start)
-- [Recommended Production Setup](#recommended-production-setup)
-- [Core Concepts](#core-concepts)
-- [Use Cases](#use-cases) — 20 copy-paste recipes
-- [Formatters & Sinks](#formatters) · [Performance Notes](#performance--reliability-notes)
-- [Architecture deep dive →](ARCHITECTURE.md)
 
 ## Requirements
 
@@ -50,13 +58,31 @@ flowchart LR
 
 ## Installation
 
-Add LogPipe to your `Package.swift`:
+### Xcode
+
+1. **File → Add Package Dependencies…**
+2. Paste the repository URL into the search field:
+   ```
+   https://github.com/konotori/LogPipe.git
+   ```
+3. Set the dependency rule to **Up to Next Major Version** from `1.0.0`, then click **Add Package**.
+
+### Swift Package Manager
+
+Add the dependency to your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/konotori/LogPipe", from: "1.0.0")
+.package(url: "https://github.com/konotori/LogPipe.git", from: "1.0.0")
 ```
 
-Or in Xcode: **File → Add Package Dependencies…** and paste the repository URL.
+Then add `LogPipe` to your target:
+
+```swift
+.target(
+    name: "MyApp",
+    dependencies: ["LogPipe"]
+)
+```
 
 ## Quick Start
 
@@ -155,8 +181,6 @@ public struct LoggerConfiguration: Sendable {
     var dateProvider: @Sendable () -> Date
 }
 ```
-
----
 
 ## Use Cases
 
@@ -452,8 +476,6 @@ Task.detached {
 ```
 
 Thread info (`"main"`/`"background"`) and timestamps are captured **at the call site**, so they describe where you logged from — not the logger's internal queue.
-
----
 
 ## Formatters
 

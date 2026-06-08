@@ -5,7 +5,6 @@
 [![Swift 6.0](https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white)](https://swift.org)
 [![Platforms](https://img.shields.io/badge/Platforms-iOS%2015%2B%20%7C%20macOS%2012%2B-blue?logo=apple)](#yêu-cầu)
 [![SPM](https://img.shields.io/badge/SwiftPM-compatible-brightgreen)](#cài-đặt)
-[![Sendable](https://img.shields.io/badge/Concurrency-Sendable-9cf)](#20-swift-6-concurrency--actor-và-task)
 [![License: MIT](https://img.shields.io/badge/License-MIT-lightgrey)](LICENSE)
 
 > [English](README.md) | Tiếng Việt
@@ -20,7 +19,25 @@ flowchart LR
     F -- "JSON · error+" --> I["☁️ Remote"]
 ```
 
-## Điểm nổi bật
+## Mục lục
+
+- [Tính năng](#tính-năng)
+- [Yêu cầu](#yêu-cầu)
+- [Cài đặt](#cài-đặt)
+- [Bắt đầu nhanh](#bắt-đầu-nhanh)
+- [Setup khuyến nghị cho production](#setup-khuyến-nghị-cho-production)
+- [Khái niệm cốt lõi](#khái-niệm-cốt-lõi)
+- [Các use case](#các-use-case) — 20 công thức copy-paste
+- [Formatters](#formatters)
+- [Sinks](#sinks)
+- [Ghi chú về hiệu năng & độ tin cậy](#ghi-chú-về-hiệu-năng--độ-tin-cậy)
+- [Chạy test](#chạy-test)
+- [Roadmap](#roadmap)
+- [License](#license)
+
+Tìm hiểu sâu kiến trúc → [ARCHITECTURE.vi.md](ARCHITECTURE.vi.md)
+
+## Tính năng
 
 - **Một API cho mọi tầng** — UI, Network, Business, System.
 - **Log có cấu trúc** — message + tags + context có kiểu, query được trên mọi collector.
@@ -30,15 +47,6 @@ flowchart LR
 - **An toàn khi crash** — `fatal` chạy đồng bộ; `flush()` đẩy hết log đang chờ khi cần.
 - **Gần như zero-cost khi bị tắt** — fast path bằng `@autoclosure`: dưới `minLevel`, message còn chưa được tạo ra.
 - **Swift 6 native** — mọi public type đều `Sendable`; dùng từ bất kỳ actor, task hay thread nào.
-
-## Mục lục
-
-- [Yêu cầu](#yêu-cầu) · [Cài đặt](#cài-đặt) · [Bắt đầu nhanh](#bắt-đầu-nhanh)
-- [Setup khuyến nghị cho production](#setup-khuyến-nghị-cho-production)
-- [Khái niệm cốt lõi](#khái-niệm-cốt-lõi)
-- [Các use case](#các-use-case) — 20 công thức copy-paste
-- [Formatters & Sinks](#formatters) · [Ghi chú hiệu năng](#ghi-chú-về-hiệu-năng--độ-tin-cậy)
-- [Tìm hiểu sâu kiến trúc →](ARCHITECTURE.vi.md)
 
 ## Yêu cầu
 
@@ -50,13 +58,31 @@ flowchart LR
 
 ## Cài đặt
 
-Thêm LogPipe vào `Package.swift`:
+### Xcode
+
+1. **File → Add Package Dependencies…**
+2. Dán URL của repo vào ô tìm kiếm:
+   ```
+   https://github.com/konotori/LogPipe.git
+   ```
+3. Chọn dependency rule **Up to Next Major Version** từ `1.0.0`, rồi bấm **Add Package**.
+
+### Swift Package Manager
+
+Thêm dependency vào `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/konotori/LogPipe", from: "1.0.0")
+.package(url: "https://github.com/konotori/LogPipe.git", from: "1.0.0")
 ```
 
-Hoặc trong Xcode: **File → Add Package Dependencies…** rồi dán URL của repo.
+Rồi thêm `LogPipe` vào target:
+
+```swift
+.target(
+    name: "MyApp",
+    dependencies: ["LogPipe"]
+)
+```
 
 ## Bắt đầu nhanh
 
@@ -155,8 +181,6 @@ public struct LoggerConfiguration: Sendable {
     var dateProvider: @Sendable () -> Date
 }
 ```
-
----
 
 ## Các use case
 
@@ -453,8 +477,6 @@ Task.detached {
 ```
 
 Thông tin thread (`"main"`/`"background"`) và timestamp được lấy **ngay tại chỗ gọi log**, nên chúng mô tả đúng code của bạn — không phải queue nội bộ của logger.
-
----
 
 ## Formatters
 
